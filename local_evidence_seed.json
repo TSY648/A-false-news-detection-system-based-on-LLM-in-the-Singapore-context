@@ -1,0 +1,15 @@
+[
+  {
+    "id": "demo-fertility-rate-2025",
+    "title": "Sample local evidence: Singapore fertility rate in 2025",
+    "source": "demo://fertility-rate-2025",
+    "source_type": "demo_seed",
+    "published_at": "2026-02-26",
+    "tags": [
+      "sample",
+      "statistics",
+      "singapore"
+    ],
+    "content": "Sample local evidence for module 3.1 integration. Singapore's total fertility rate fell to 0.87 in 2025, and the statement was attributed to Deputy Prime Minister Gan Kim Yong speaking in parliament on Feb 26. Replace this demo seed with curated POFMA, Factually, MOH, CPF Board, and other policy documents."
+  }
+]
