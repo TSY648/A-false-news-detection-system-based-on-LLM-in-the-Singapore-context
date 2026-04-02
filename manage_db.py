@@ -29,25 +29,21 @@ def parse_metadata(metadata_text: Optional[str], metadata_file: Optional[str]) -
     return {}
 
 
-def build_common_parser(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--provider", choices=["pinecone", "chroma"], default=None)
-
-
 def cmd_add(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     metadata = parse_metadata(args.metadata, args.metadata_file)
     db.upsert_document(doc_id=args.id, text=args.text, metadata=metadata)
     print(json.dumps({"ok": True, "action": "add", "id": args.id}, ensure_ascii=False, indent=2))
 
 
 def cmd_get(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     result = db.get_document_by_id(args.id)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_list(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     result = db.list_documents(
         limit=args.limit,
         offset=args.offset,
@@ -58,20 +54,20 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 
 def cmd_search(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     result = db.search(query=args.query, top_k=args.top_k)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_update(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     metadata = parse_metadata(args.metadata, args.metadata_file)
     db.update_document(doc_id=args.id, new_text=args.text, metadata=metadata)
     print(json.dumps({"ok": True, "action": "update", "id": args.id}, ensure_ascii=False, indent=2))
 
 
 def cmd_update_metadata(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     metadata = parse_metadata(args.metadata, args.metadata_file)
     db.update_metadata_only(doc_id=args.id, metadata=metadata)
     print(
@@ -84,7 +80,7 @@ def cmd_update_metadata(args: argparse.Namespace) -> None:
 
 
 def cmd_delete(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     db.delete_document(args.id)
     print(json.dumps({"ok": True, "action": "delete", "id": args.id}, ensure_ascii=False, indent=2))
 
@@ -102,7 +98,7 @@ def cmd_seed(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest_json(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     documents = load_documents_from_json(args.input_file)
     chunks = chunk_documents(
         documents,
@@ -127,7 +123,7 @@ def cmd_ingest_json(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest_dir(args: argparse.Namespace) -> None:
-    db = EvidenceDatabase(provider=args.provider)
+    db = EvidenceDatabase()
     documents = load_documents_from_directory(args.input_dir)
     chunks = chunk_documents(
         documents,
@@ -156,7 +152,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     add_parser = subparsers.add_parser("add", help="Add or upsert one document.")
-    build_common_parser(add_parser)
     add_parser.add_argument("--id", required=True)
     add_parser.add_argument("--text", required=True)
     add_parser.add_argument("--metadata")
@@ -164,12 +159,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.set_defaults(func=cmd_add)
 
     get_parser = subparsers.add_parser("get", help="Fetch one document by id.")
-    build_common_parser(get_parser)
     get_parser.add_argument("--id", required=True)
     get_parser.set_defaults(func=cmd_get)
 
     list_parser = subparsers.add_parser("list", help="List documents.")
-    build_common_parser(list_parser)
     list_parser.add_argument("--limit", type=int, default=20)
     list_parser.add_argument("--offset", type=int, default=0)
     list_parser.add_argument("--prefix")
@@ -177,13 +170,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.set_defaults(func=cmd_list)
 
     search_parser = subparsers.add_parser("search", help="Semantic search by query.")
-    build_common_parser(search_parser)
     search_parser.add_argument("--query", required=True)
     search_parser.add_argument("--top-k", type=int, default=3)
     search_parser.set_defaults(func=cmd_search)
 
     update_parser = subparsers.add_parser("update", help="Replace text and metadata for one document.")
-    build_common_parser(update_parser)
     update_parser.add_argument("--id", required=True)
     update_parser.add_argument("--text", required=True)
     update_parser.add_argument("--metadata")
@@ -191,14 +182,12 @@ def build_parser() -> argparse.ArgumentParser:
     update_parser.set_defaults(func=cmd_update)
 
     meta_parser = subparsers.add_parser("update-metadata", help="Update metadata only for one document.")
-    build_common_parser(meta_parser)
     meta_parser.add_argument("--id", required=True)
     meta_parser.add_argument("--metadata")
     meta_parser.add_argument("--metadata-file")
     meta_parser.set_defaults(func=cmd_update_metadata)
 
     delete_parser = subparsers.add_parser("delete", help="Delete one document by id.")
-    build_common_parser(delete_parser)
     delete_parser.add_argument("--id", required=True)
     delete_parser.set_defaults(func=cmd_delete)
 
@@ -211,7 +200,6 @@ def build_parser() -> argparse.ArgumentParser:
         "ingest-json",
         help="Load document JSON, chunk it, and ingest chunks into the vector DB.",
     )
-    build_common_parser(ingest_json_parser)
     ingest_json_parser.add_argument("--input-file", required=True)
     ingest_json_parser.add_argument("--chunk-size", type=int, default=180)
     ingest_json_parser.add_argument("--overlap", type=int, default=30)
@@ -221,7 +209,6 @@ def build_parser() -> argparse.ArgumentParser:
         "ingest-dir",
         help="Load .txt/.md files from a directory, chunk them, and ingest chunks.",
     )
-    build_common_parser(ingest_dir_parser)
     ingest_dir_parser.add_argument("--input-dir", required=True)
     ingest_dir_parser.add_argument("--chunk-size", type=int, default=180)
     ingest_dir_parser.add_argument("--overlap", type=int, default=30)
