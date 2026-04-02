@@ -1,23 +1,22 @@
 import json
 import os
 import time
-from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-import chromadb
 import requests
 
+from env_config import load_project_env
 from embedder import SafeEmbeddingFunction
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_PERSIST_PATH = BASE_DIR / "chroma_store"
-DEFAULT_COLLECTION_NAME = "evidence_collection_module31"
-DEFAULT_PROVIDER = os.getenv("VECTOR_DB_PROVIDER", "").strip().lower() or None
+load_project_env()
+
+
+DEFAULT_COLLECTION_NAME = "evidence-collection-module31"
 
 PINECONE_API_VERSION = os.getenv("PINECONE_API_VERSION", "2025-10")
 PINECONE_CONTROL_PLANE_URL = os.getenv("PINECONE_CONTROL_PLANE_URL", "https://api.pinecone.io")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "ci-evidence-index")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", DEFAULT_COLLECTION_NAME)
 PINECONE_NAMESPACE = os.getenv("PINECONE_NAMESPACE", "module31")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
@@ -26,95 +25,8 @@ PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", "384"))
 PINECONE_TIMEOUT = int(os.getenv("PINECONE_TIMEOUT_SECONDS", "30"))
 
 
-class ChromaEvidenceStore:
-    def __init__(
-        self,
-        embedding_function: SafeEmbeddingFunction,
-        persist_path: Optional[str] = None,
-        collection_name: str = DEFAULT_COLLECTION_NAME,
-    ):
-        self.persist_path = Path(persist_path) if persist_path else DEFAULT_PERSIST_PATH
-        self.persist_path.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(self.persist_path))
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            embedding_function=embedding_function,
-        )
-
-    def upsert(self, ids: list[str], texts: list[str], metadatas: list[dict]) -> int:
-        self.collection.upsert(ids=ids, documents=texts, metadatas=metadatas)
-        return len(ids)
-
-    def query(self, query: str, top_k: int = 3, metadata_filter: Optional[Dict] = None) -> dict:
-        return self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            where=metadata_filter,
-        )
-
-    def count(self) -> int:
-        return self.collection.count()
-
-    def fetch(self, doc_id: str) -> Optional[dict]:
-        result = self.collection.get(
-            ids=[doc_id],
-            include=["documents", "metadatas"],
-        )
-        ids = result.get("ids") or []
-        if not ids:
-            return None
-
-        documents = result.get("documents") or []
-        metadatas = result.get("metadatas") or []
-
-        return {
-            "id": ids[0],
-            "text": documents[0] if documents else "",
-            "metadata": metadatas[0] if metadatas else {},
-        }
-
-    def list_documents(self, limit: int = 100, offset: int = 0, prefix: Optional[str] = None) -> dict:
-        result = self.collection.get(
-            limit=limit,
-            offset=offset,
-            include=["documents", "metadatas"],
-        )
-        ids = result.get("ids") or []
-        documents = result.get("documents") or []
-        metadatas = result.get("metadatas") or []
-
-        records = []
-        for i, doc_id in enumerate(ids):
-            if prefix and not str(doc_id).startswith(prefix):
-                continue
-            records.append(
-                {
-                    "id": doc_id,
-                    "text": documents[i] if i < len(documents) else "",
-                    "metadata": metadatas[i] if i < len(metadatas) else {},
-                }
-            )
-
-        return {
-            "documents": records,
-            "next_offset": offset + len(ids),
-            "pagination_token": None,
-        }
-
-    def update_metadata(self, doc_id: str, metadata: dict):
-        self.collection.update(ids=[doc_id], metadatas=[metadata])
-
-    def delete(self, doc_id: str):
-        self.collection.delete(ids=[doc_id])
-
-
 class PineconeEvidenceStore:
-    """
-    Minimal Pinecone REST client for dense-vector search.
-
-    This keeps the project independent from local Pinecone SDK packaging issues
-    while still using Pinecone as the cloud vector database.
-    """
+    """Pinecone REST client used as the only vector database backend."""
 
     def __init__(
         self,
@@ -139,7 +51,7 @@ class PineconeEvidenceStore:
         self.index_host = os.getenv("PINECONE_INDEX_HOST")
 
         if not self.api_key:
-            raise ValueError("PINECONE_API_KEY is required when using Pinecone.")
+            raise ValueError("PINECONE_API_KEY is required.")
 
         self._ensure_index()
 
@@ -172,9 +84,7 @@ class PineconeEvidenceStore:
         )
 
         if response.status_code not in expected_statuses:
-            raise RuntimeError(
-                f"Pinecone request failed: {response.status_code} {response.text}"
-            )
+            raise RuntimeError(f"Pinecone request failed: {response.status_code} {response.text}")
 
         if not response.text.strip():
             return {}
@@ -235,77 +145,6 @@ class PineconeEvidenceStore:
         if not self.index_host:
             raise RuntimeError("Pinecone index host is not available.")
         return f"https://{self.index_host}{path}"
-
-    def fetch(self, doc_id: str) -> Optional[dict]:
-        response = requests.get(
-            self._data_url("/vectors/fetch"),
-            headers=self.data_headers,
-            params={"ids": [doc_id], "namespace": self.namespace},
-            timeout=self.timeout_seconds,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Pinecone fetch failed: {response.status_code} {response.text}"
-            )
-
-        payload = response.json()
-        vectors = payload.get("vectors") or {}
-        item = vectors.get(doc_id)
-        if not item:
-            return None
-
-        metadata = item.get("metadata") or {}
-        return {
-            "id": item.get("id", doc_id),
-            "text": metadata.get("text", ""),
-            "metadata": metadata,
-            "values": item.get("values"),
-        }
-
-    def list_documents(
-        self,
-        limit: int = 100,
-        offset: int = 0,
-        prefix: Optional[str] = None,
-        pagination_token: Optional[str] = None,
-    ) -> dict:
-        params: Dict[str, Any] = {
-            "namespace": self.namespace,
-            "limit": limit,
-        }
-        if prefix:
-            params["prefix"] = prefix
-        if pagination_token:
-            params["paginationToken"] = pagination_token
-
-        response = requests.get(
-            self._data_url("/vectors/list"),
-            headers=self.data_headers,
-            params=params,
-            timeout=self.timeout_seconds,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Pinecone list failed: {response.status_code} {response.text}"
-            )
-
-        payload = response.json()
-        vector_rows = payload.get("vectors") or []
-        ids = [row.get("id") for row in vector_rows if row.get("id")]
-
-        documents = []
-        for doc_id in ids:
-            item = self.fetch(doc_id)
-            if item is not None:
-                documents.append(item)
-
-        next_token = (payload.get("pagination") or {}).get("next")
-        return {
-            "documents": documents,
-            "next_offset": offset + len(documents),
-            "pagination_token": next_token,
-        }
-
 
     def upsert(self, ids: list[str], texts: list[str], metadatas: list[dict]) -> int:
         vectors = []
@@ -380,11 +219,73 @@ class PineconeEvidenceStore:
         )
         namespaces = response.get("namespaces") or {}
         namespace_info = namespaces.get(self.namespace) or {}
-        return int(
-            namespace_info.get("vectorCount")
-            or namespace_info.get("vector_count")
-            or 0
+        return int(namespace_info.get("vectorCount") or namespace_info.get("vector_count") or 0)
+
+    def fetch(self, doc_id: str) -> Optional[dict]:
+        response = requests.get(
+            self._data_url("/vectors/fetch"),
+            headers=self.data_headers,
+            params={"ids": [doc_id], "namespace": self.namespace},
+            timeout=self.timeout_seconds,
         )
+        if response.status_code != 200:
+            raise RuntimeError(f"Pinecone fetch failed: {response.status_code} {response.text}")
+
+        payload = response.json()
+        vectors = payload.get("vectors") or {}
+        item = vectors.get(doc_id)
+        if not item:
+            return None
+
+        metadata = item.get("metadata") or {}
+        return {
+            "id": item.get("id", doc_id),
+            "text": metadata.get("text", ""),
+            "metadata": metadata,
+            "values": item.get("values"),
+        }
+
+    def list_documents(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        prefix: Optional[str] = None,
+        pagination_token: Optional[str] = None,
+    ) -> dict:
+        params: Dict[str, Any] = {
+            "namespace": self.namespace,
+            "limit": limit,
+        }
+        if prefix:
+            params["prefix"] = prefix
+        if pagination_token:
+            params["paginationToken"] = pagination_token
+
+        response = requests.get(
+            self._data_url("/vectors/list"),
+            headers=self.data_headers,
+            params=params,
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Pinecone list failed: {response.status_code} {response.text}")
+
+        payload = response.json()
+        vector_rows = payload.get("vectors") or []
+        ids = [row.get("id") for row in vector_rows if row.get("id")]
+
+        documents = []
+        for doc_id in ids:
+            item = self.fetch(doc_id)
+            if item is not None:
+                documents.append(item)
+
+        next_token = (payload.get("pagination") or {}).get("next")
+        return {
+            "documents": documents,
+            "next_offset": offset + len(documents),
+            "pagination_token": next_token,
+        }
 
     def update_metadata(self, doc_id: str, metadata: dict):
         self._request(
@@ -408,25 +309,13 @@ class PineconeEvidenceStore:
 
 
 class EvidenceDatabase:
-    def __init__(
-        self,
-        persist_path: Optional[str] = None,
-        collection_name: str = DEFAULT_COLLECTION_NAME,
-        provider: Optional[str] = None,
-    ):
+    def __init__(self, collection_name: Optional[str] = None):
         self.embedding_function = SafeEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-        self.provider = (provider or DEFAULT_PROVIDER or ("pinecone" if os.getenv("PINECONE_API_KEY") else "chroma")).lower()
-
-        if self.provider == "pinecone":
-            self.store = PineconeEvidenceStore(embedding_function=self.embedding_function)
-        elif self.provider == "chroma":
-            self.store = ChromaEvidenceStore(
-                embedding_function=self.embedding_function,
-                persist_path=persist_path,
-                collection_name=collection_name,
-            )
-        else:
-            raise ValueError(f"Unsupported vector DB provider: {self.provider}")
+        self.provider = "pinecone"
+        self.store = PineconeEvidenceStore(
+            embedding_function=self.embedding_function,
+            index_name=collection_name or PINECONE_INDEX_NAME,
+        )
 
     @staticmethod
     def _normalize_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -498,14 +387,12 @@ class EvidenceDatabase:
         prefix: Optional[str] = None,
         pagination_token: Optional[str] = None,
     ) -> Dict[str, Any]:
-        if self.provider == "pinecone":
-            return self.store.list_documents(
-                limit=limit,
-                offset=offset,
-                prefix=prefix,
-                pagination_token=pagination_token,
-            )
-        return self.store.list_documents(limit=limit, offset=offset, prefix=prefix)
+        return self.store.list_documents(
+            limit=limit,
+            offset=offset,
+            prefix=prefix,
+            pagination_token=pagination_token,
+        )
 
     def update_document(self, doc_id: str, new_text: str, metadata: Optional[Dict] = None):
         self.upsert_document(doc_id=doc_id, text=new_text, metadata=metadata)

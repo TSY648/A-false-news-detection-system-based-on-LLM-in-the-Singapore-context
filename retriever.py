@@ -10,12 +10,8 @@ DEFAULT_SEED_PATH = BASE_DIR / "local_evidence_seed.json"
 
 
 class Retriever:
-    def __init__(
-        self,
-        persist_path: Optional[str] = None,
-        seed_path: Optional[str] = None,
-    ):
-        self.db = EvidenceDatabase(persist_path=persist_path)
+    def __init__(self, seed_path: Optional[str] = None):
+        self.db = EvidenceDatabase()
         self.seed_path = Path(seed_path) if seed_path else DEFAULT_SEED_PATH
 
     def add_document(self, doc_id: str, text: str, metadata: Optional[dict] = None):
@@ -25,13 +21,7 @@ class Retriever:
         return self.db.upsert_documents(documents)
 
     def bootstrap_from_seed(self, force: bool = False) -> int:
-        """
-        Load a local curated corpus into the vector store.
-
-        Replace the demo seed file with real POFMA / Factually / policy data
-        when the team is ready to ingest the production corpus.
-        """
-
+        """Load seed data into Pinecone."""
         if self.db.count() > 0 and not force:
             return 0
 
@@ -73,13 +63,7 @@ class Retriever:
         max_distance: Optional[float] = 1.2,
         metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Use the claim to retrieve nearby evidence from the local vector store.
-
-        `distance` is kept for debugging, while `score` is normalized for easier
-        downstream use in cache-hit logic and later reranking.
-        """
-
+        """Use the claim to retrieve nearby evidence from Pinecone."""
         raw = self.db.search(query=claim, top_k=top_k, metadata_filter=metadata_filter)
 
         if not raw or not raw.get("ids") or not raw["ids"][0]:
@@ -105,7 +89,7 @@ class Retriever:
                 {
                     "id": doc_id,
                     "title": metadata.get("title"),
-                    "url": metadata.get("source") or "local_db",
+                    "url": metadata.get("source") or "pinecone_db",
                     "content": docs[i] if i < len(docs) else "",
                     "distance": distance,
                     "score": score,
