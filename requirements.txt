@@ -1,0 +1,4 @@
+# Python 3.10+ 建议
+google-genai>=1.0.0
+tavily-python>=0.5.0
+chromadb>=0.5.0
